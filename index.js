@@ -1,7 +1,5 @@
-// index.js - Final version with partner connection status
-
 import { createServer } from 'http';
-import { WebSocketServer, WebSocket } from 'ws';
+import { WebSocketServer } from 'ws';
 import { createClient } from 'redis';
 
 const PORT = process.env.PORT || 8080;
@@ -54,45 +52,40 @@ const startServer = async () => {
 
         console.log(`Client connected to room: ${roomCode}. Total clients: ${room.size}`);
         
-        // --- NEW: Logic to notify clients when a partner connects ---
         if (room.size === 2) {
             const connectedMessage = JSON.stringify({ type: 'partner_connected' });
             room.forEach(client => client.send(connectedMessage));
             console.log(`Room ${roomCode} is full. Notified clients.`);
         }
-        // --- END NEW LOGIC ---
 
         const historyJSON = await redisClient.get(roomCode);
         if (historyJSON) {
+            console.log(`[HISTORY] Found history for room ${roomCode}. Restoring...`);
             ws.send(JSON.stringify({ type: 'history_restore', payload: JSON.parse(historyJSON) }));
         }
 
         ws.on('message', async (messageBuffer) => {
             const message = messageBuffer.toString();
-            // Relay the message to every *other* client in the same room.
             room.forEach(client => {
-                if (client !== ws && client.readyState === WebSocket.OPEN) {
+                if (client !== ws && client.readyState === 1) { // WebSocket.OPEN
                     client.send(message);
                 }
             });
 
-            // Save history (your existing logic)
             const parsedMessage = JSON.parse(message);
             if (parsedMessage.type === 'ai_response' || parsedMessage.type === 'user_message') {
                 const currentHistory = JSON.parse(await redisClient.get(roomCode) || '[]');
                 currentHistory.push(parsedMessage);
                 await redisClient.set(roomCode, JSON.stringify(currentHistory));
+                console.log(`[HISTORY] Saved '${parsedMessage.type}' to room ${roomCode}.`);
             }
         });
 
         ws.on('close', () => {
             room.delete(ws);
             console.log(`Client disconnected from room: ${roomCode}. Remaining clients: ${room.size}`);
-            
-            // --- NEW: Logic to notify the remaining client that their partner has left ---
             const disconnectedMessage = JSON.stringify({ type: 'partner_disconnected' });
             room.forEach(client => client.send(disconnectedMessage));
-            // --- END NEW LOGIC ---
         });
     });
 
